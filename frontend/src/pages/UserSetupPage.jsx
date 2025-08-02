@@ -1,11 +1,17 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { auth } from '../firebase'
+import { signInAnonymously } from 'firebase/auth'; // signInAnonymously関数をインポート
 
 const UserSetupPage = () => {
     const navigate = useNavigate();
     const [username, setUsername] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState('');
 
-    const handleCreateRoom = () => {
+
+
+    const handleCreateRoom = async () => {
         // ユーザー名が入力されているかチェック
         if (username.trim() === '') {
             alert('ニックネームを入力してください。');
@@ -13,11 +19,43 @@ const UserSetupPage = () => {
         }
 
         // TODO: バックエンドにルーム作成リクエストを送信する処理を実装
-        // バックエンドからroomIdを受け取ったと仮定
-        const roomId = 'mockRoomId123';
+        setIsLoading(true);
+        try {
+            //匿名認証を実行
+            const userCredential = await signInAnonymously(auth);
+            const user = userCredential.user;
+            const uid = user.uid;
 
-        // 次のページに遷移
-        navigate(`/room/create/${roomId}`);
+            // ユーザー名とUIDをlocalStorageに保存
+            localStorage.setItem('username', username);
+            localStorage.setItem('uid', uid);
+
+            console.log("Authenticated as:", uid);
+
+            const response = await fetch('http://localhost:5000/create_room', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ username }),
+            });
+
+            if (!response.ok) {
+                throw new Error('ルームの作成に失敗しました。');
+            }
+
+            const data = await response.json();
+            const roomId = data.roomId;
+
+            // 成功したら、ルームの議論準備ページに遷移
+            navigate(`/room/create/${roomId}`)
+
+        } catch (err) {
+            setError(err.message);
+            console.error('API Error', err);
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     const handleBack = () => {
@@ -53,7 +91,7 @@ const UserSetupPage = () => {
                     onClick={handleCreateRoom}
                     className="w-full px-6 py-4 bg-blue-600 text-white rounded-lg shadow-lg hover:bg-blue-700 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 text-xl font-semibold"
                 >
-                    ルームを作成
+                    {isLoading ? '作成中...' : 'ルームを作成'}
                 </button>
             </div>
             {/* 戻る */}
