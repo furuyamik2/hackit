@@ -1,22 +1,64 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import io from 'socket.io-client'; // WebSocket通信のためにsocket.io-clientをインポート
+
+const socket = io('http://localhost:5001', { path: '/socket.io' });
+
 
 const RoomCreationPage = () => {
     const { roomId } = useParams();
     const navigate = useNavigate();
 
     // 参加者、議題、時間の状態を管理
-    const [participants, setParticipants] = useState(['Alice']); // 作成者を初期値に設定
+    const [participants, setParticipants] = useState([]); // 作成者を初期値に設定
     const [topic, setTopic] = useState('');
     const [duration, setDuration] = useState('');
-    const [isCreator, setIsCreator] = useState(true); // 作成者かどうかを判定する状態
+    const [isCreator, setIsCreator] = useState(false); // 作成者かどうかを判定する状態
 
-    // モックデータとして、参加者の追加をシミュレーション
     useEffect(() => {
-        const timer = setTimeout(() => {
-            setParticipants(prev => [...prev, 'Bob', 'Charlie']);
-        }, 3000);
-        return () => clearTimeout(timer);
+        // WebSocket接続をコンポーネントがマウントされた時にのみ実行
+        const username = localStorage.getItem('username');
+        const uid = localStorage.getItem('uid');
+
+        socket.on('connect', () => {
+            console.log('Socket.IO connected!');
+            if (username && uid) {
+                // ルーム参加を通知
+                socket.emit('join_room', { roomId, username, uid });
+            }
+        });
+
+        socket.on('participants_update', (data) => {
+            setParticipants(data.participants);
+            const currentUid = localStorage.getItem('uid');
+            if (data.creator_uid === currentUid) {
+                setIsCreator(true);
+            }
+        });
+
+        // 切断時の処理
+        socket.on('disconnect', () => {
+            console.log('Socket.IO disconnected.');
+        });
+
+        // クリーンアップ関数
+        // コンポーネントがアンマウントされたら接続を切断
+        return () => {
+            console.log('Leaving room and disconnecting socket...');
+            if (username && uid) {
+                // コンポーネントがアンマウントされる前に leave_room イベントを送信
+                socket.emit('leave_room', { roomId, uid });
+            }
+            socket.disconnect();
+        };
+    }, [roomId]); // roomId が変更された時のみuseEffectが実行される
+
+    // ローカルストレージから取得したユーザー名を初期表示
+    useEffect(() => {
+        const username = localStorage.getItem('username');
+        if (username) {
+            setParticipants([username]);
+        }
     }, []);
 
     const handleStartDiscussion = () => {
@@ -42,6 +84,7 @@ const RoomCreationPage = () => {
                 <div className="text-center mb-6">
                     <h1 className="text-xl font-bold text-gray-800">ルームID: <span className="text-blue-600">{roomId}</span></h1>
                 </div>
+
 
                 {/* 議題と制限時間の設定フォーム */}
                 <div className="flex flex-col gap-6">
@@ -74,14 +117,18 @@ const RoomCreationPage = () => {
 
                 {/* 参加者リスト */}
                 <div className="mt-8">
-                    <h2 className="text-lg font-semibold text-gray-700 mb-2">参加者 ({participants.length}人)</h2>
+                    <h2 className="text-lg font-semibold text-gray-700 mb-2">参加者 ({participants.length}/5人)</h2>
                     <ul className="bg-gray-100 p-4 rounded-lg shadow-inner">
-                        {participants.map((p, index) => (
-                            <li key={index} className="text-md text-gray-800 py-1">
-                                <span className="mr-2 text-blue-500 font-medium">&#9679;</span>
-                                {p}
-                            </li>
-                        ))}
+                        {participants.length === 0 ? (
+                            <li className="text-md text-gray-500 py-1">他の人が参加するのを待っています...</li>
+                        ) : (
+                            participants.map((p, index) => (
+                                <li key={index} className="text-md text-gray-800 py-1">
+                                    <span className="mr-2 text-blue-500 font-medium">&#9679;</span>
+                                    {p}
+                                </li>
+                            ))
+                        )}
                     </ul>
                 </div>
 
