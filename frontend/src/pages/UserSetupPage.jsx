@@ -1,12 +1,18 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import img from "../assets/logo.png"; // ロゴ画像のインポート
+import { auth } from '../firebase'
+import { signInAnonymously } from 'firebase/auth'; // signInAnonymously関数をインポート
 
 const UserSetupPage = () => {
     const navigate = useNavigate();
     const [username, setUsername] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState('');
 
-    const handleCreateRoom = () => {
+
+
+    const handleCreateRoom = async () => {
         // ユーザー名が入力されているかチェック
         if (username.trim() === '') {
             alert('ニックネームを入力してください。');
@@ -14,11 +20,42 @@ const UserSetupPage = () => {
         }
 
         // TODO: バックエンドにルーム作成リクエストを送信する処理を実装
-        // バックエンドからroomIdを受け取ったと仮定
-        const roomId = 'mockRoomId123';
+        setIsLoading(true);
+        try {
+            //匿名認証を実行
+            const userCredential = await signInAnonymously(auth);
+            const user = userCredential.user;
+            const uid = user.uid;
 
-        // 次のページに遷移
-        navigate(`/room/create/${roomId}`);
+            console.log("Authenticated as:", uid);
+
+            const response = await fetch('http://localhost:5000/create_room', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ username, uid }),
+            });
+
+            if (!response.ok) {
+                throw new Error('ルームの作成に失敗しました。');
+            }
+
+            const data = await response.json();
+            const roomId = data.roomId;
+
+            localStorage.setItem('username', username);
+            localStorage.setItem('uid', uid)
+
+            // 成功したら、ルームの議論準備ページに遷移
+            navigate(`/room/${roomId}`)
+
+        } catch (err) {
+            setError(err.message);
+            console.error('API Error', err);
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     const handleBack = () => {
@@ -26,6 +63,7 @@ const UserSetupPage = () => {
     };
 
     return (
+        <div className="min-h-screen flex flex-col bg-gray-50">
         <div className="min-h-screen flex flex-col bg-gray-50">
             {/* ヘッダー */}
             <header className="w-full bg-black text-white p-4 shadow-md">
@@ -96,8 +134,11 @@ const UserSetupPage = () => {
             <footer className="bg-black text-white text-center py-0 mt-auto">
                 <p>Copyright©2025 Mint. All Rights Reserved.</p>
             </footer>
+            
+        </div>
         </div>
     );
 };
 
 export default UserSetupPage;
+

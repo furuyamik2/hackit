@@ -18,9 +18,9 @@ const App = () => {
                 {/* 参加者画面 */}
                 <Route path="/join" element={<JoinRoomPage />} />
                 {/* ルーム作成ページ */}
-                <Route path="/room/create/:roomId" element={<RoomCreationPage />} />
+                <Route path="/room/:roomId" element={<RoomCreationPage />} />
                 {/* ルームページ */}
-                <Route path="/room/discussion/:roomId" element={<RoomPage />} />
+                <Route path="/room/:roomId/discussion" element={<RoomPage />} />
 
                 <Route path="*" element={<NotFoundPage />} />
 
