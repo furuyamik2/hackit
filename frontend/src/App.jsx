@@ -20,7 +20,7 @@ const App = () => {
                 {/* ルーム作成ページ */}
                 <Route path="/room/:roomId" element={<RoomCreationPage />} />
                 {/* ルームページ */}
-                <Route path="/roomn/:roomId/discussion" element={<RoomPage />} />
+                <Route path="/room/:roomId/discussion" element={<RoomPage />} />
 
                 <Route path="*" element={<NotFoundPage />} />
 
