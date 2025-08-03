@@ -9,6 +9,8 @@ const UserSetupPage = () => {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
 
+    const API_BASE_URL = 'https://facili-ya-san-api.onrender.com';
+
 
 
     const handleCreateRoom = async () => {
@@ -28,7 +30,7 @@ const UserSetupPage = () => {
 
             console.log("Authenticated as:", uid);
 
-            const response = await fetch('http://localhost:5000/create_room', {
+            const response = await fetch(`${API_BASE_URL}/create_room`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

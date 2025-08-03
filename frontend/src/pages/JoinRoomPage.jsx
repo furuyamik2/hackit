@@ -11,6 +11,8 @@ const JoinRoomPage = () => {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
 
+    const API_BASE_URL = 'https://facili-ya-san-api.onrender.com';
+
     const handleJoin = async () => {
         setError('');
         // ルームIDとユーザー名が入力されているかチェック
@@ -29,7 +31,7 @@ const JoinRoomPage = () => {
             const uid = user.uid;
 
             // TODO: バックエンドのAPIエンドポイントURLを設定
-            const response = await fetch('http://localhost:5000/join_room', {
+            const response = await fetch(`${API_BASE_URL}/join_room`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
