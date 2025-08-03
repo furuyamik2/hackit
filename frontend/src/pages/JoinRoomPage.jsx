@@ -45,6 +45,9 @@ const JoinRoomPage = () => {
                 throw new Error(errorData.error || "ルームへの参加に失敗しました。");
             }
 
+            localStorage.setItem('username', username);
+            localStorage.setItem('uid', uid);
+
             // 成功したと仮定して、議論ページに遷移
             navigate(`/room/${roomId}`);
         } catch (err) {

@@ -15,8 +15,10 @@ const RoomCreationPage = () => {
     const [topic, setTopic] = useState("");
     const [duration, setDuration] = useState("");
     const [isCreator, setIsCreator] = useState(false); // 作成者かどうかを判定する状態
+    const [isLoading, setIsLoading] = useState(false);
 
-    const API_BASE_URL = 'https://facili-ya-san-ws-server.onrender.com';
+    const API_BASE_URL = 'https://facili-ya-san-api.onrender.com';
+    const WS_SERVER_URL = 'https://facili-ya-san-ws-server.onrender.com';
 
 
     useEffect(() => {
@@ -40,75 +42,61 @@ const RoomCreationPage = () => {
                 if (roomData.creator_uid === currentUid) {
                     setIsCreator(true);
                 }
+
+                if (roomData.status === 'discussing') {
+                    console.log("ステータスが'discussing'に変わりました。画面遷移します。");
+                    navigate(`/room/${roomId}/discussion`);
+                }
+
             } else {
                 console.error("指定されたルームが見つかりません。");
                 navigate("/not-found");
             }
         });
 
-        // WebSocket接続をコンポーネントがマウントされた時にのみ実行
-        const socket = io(`${API_BASE_URL}`, { path: "/socket.io" });
-        const username = localStorage.getItem("username");
-        const uid = localStorage.getItem("uid");
 
-        socket.on("connect", () => {
-            console.log("Socket.IO connected!");
-            if (username && uid) {
-                console.log(`🚀 'join_room'イベントを送信します。データ:`, {
-                    roomId,
-                    username,
-                    uid,
-                });
-                // ルーム参加を通知
-                socket.emit("join_room", { roomId, username, uid });
-            }
-        });
-
-        socket.on("participants_update", (data) => {
-            console.log(
-                `🎉 'participants_update'イベントを受信しました。データ:`,
-                data,
-            );
-            setParticipants(data.participants);
-            const currentUid = localStorage.getItem("uid");
-            if (data.creator_uid === currentUid) {
-                setIsCreator(true);
-            }
-        });
-
-        // 切断時の処理
-        socket.on("disconnect", () => {
-            console.log("Socket.IO disconnected.");
-        });
-
-        // クリーンアップ関数
-        // コンポーネントがアンマウントされたら接続を切断
         return () => {
             console.log("Leaving room and disconnecting socket...");
-            if (username && uid) {
-                // コンポーネントがアンマウントされる前に leave_room イベントを送信
-                socket.emit("leave_room", { roomId, uid });
-            }
+            // if (username && uid) {
+            //     // コンポーネントがアンマウントされる前に leave_room イベントを送信
+            //     socket.emit("leave_room", { roomId, uid });
+            // }
             unsubscribe();
-            socket.disconnect();
         };
     }, [roomId, navigate]); // roomId が変更された時のみuseEffectが実行される
 
-    const handleStartDiscussion = () => {
-        // 議論開始ボタンが押された時の処理
+    const handleStartDiscussion = async () => {
+        // 議題と時間が入力されているかチェック
         if (topic.trim() === "" || duration.trim() === "") {
             alert("議題と制限時間を設定してください。");
             return;
         }
 
-        // TODO: バックエンドに議題と時間を設定するAPIを呼び出し、
-        // 成功したら議論開始をトリガーするAPIを呼び出す
+        setIsLoading(true); // 処理中の状態にする
 
-        console.log("議論開始情報:", { topic, duration });
+        try {
+            // APIサーバーに議題と時間を保存し、ステータスを'discussing'に変更するよう依頼
+            const response = await fetch(`${API_BASE_URL}/update_room_settings`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    roomId,
+                    topic,
+                    duration: parseInt(duration, 10)
+                }),
+            });
 
-        // 議論実行ページに遷移
-        navigate(`/room/${roomId}/discussion`);
+            if (!response.ok) {
+                throw new Error('設定の保存に失敗しました。');
+            }
+            // 成功すれば、あとはonSnapshotが自動で画面遷移させてくれる
+        } catch (error) {
+            console.error("議論の開始に失敗しました:", error);
+            alert("エラーが発生しました。もう一度お試しください。");
+            setIsLoading(false);
+        }
     };
+
 
     return (
         <div className="min-h-screen flex flex-col bg-gray-50">
