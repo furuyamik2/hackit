@@ -1,31 +1,62 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { signInAnonymously } from 'firebase/auth'; // 匿名認証関数をインポート
+import { auth } from '../firebase'; // authサービスをインポート
 
 const JoinRoomPage = () => {
     const navigate = useNavigate();
     const [roomId, setRoomId] = useState('');
     const [username, setUsername] = useState('');
 
-    const handleJoin = () => {
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState('');
+
+    const handleJoin = async () => {
+        setError('');
         // ルームIDとユーザー名が入力されているかチェック
         if (roomId.trim() === '' || username.trim() === '') {
             alert('ルームIDとニックネームを両方入力してください。');
             return;
         }
 
-        // バックエンドにルームIDとユーザー名を送信する処理（ここでは仮にコンソールに出力）
-        console.log('ルームに参加:', { roomId, username });
+        setIsLoading(true);
 
-        // 成功したと仮定して、議論ページに遷移
-        navigate(`/room/create/${roomId}`);
+        // バックエンドにルームIDとユーザー名を送信する処理
+        try {
+            // 匿名認証を実行
+            const userCredential = await signInAnonymously(auth);
+            const user = userCredential.user;
+            const uid = user.uid;
+
+            // TODO: バックエンドのAPIエンドポイントURLを設定
+            const response = await fetch('http://localhost:5000/join_room', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ roomId, username, uid }),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'ルームへの参加に失敗しました。');
+            }
+
+            // 成功したと仮定して、議論ページに遷移
+            navigate(`/room/create/${roomId}`);
+
+        } catch (err) {
+            setError(err.message);
+            console.error('API Error:', err);
+        } finally {
+            setIsLoading(false);
+        }
     };
 
 
     const handleBack = () => {
-
         navigate(`/`);
-
-    }
+    };
 
     return (
         <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-4">
