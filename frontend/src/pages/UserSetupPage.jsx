@@ -47,7 +47,7 @@ const UserSetupPage = () => {
             localStorage.setItem('uid', uid)
 
             // 成功したら、ルームの議論準備ページに遷移
-            navigate(`/room/create/${roomId}`)
+            navigate(`/room/${roomId}`)
 
         } catch (err) {
             setError(err.message);
