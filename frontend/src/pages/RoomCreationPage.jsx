@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import io from 'socket.io-client'; // WebSocket通信のためにsocket.io-clientをインポート
 
+import { doc, onSnapshot } from 'firebase/firestore';
+import { db } from '../firebase';
 
 const RoomCreationPage = () => {
     const { roomId } = useParams();
@@ -14,6 +16,33 @@ const RoomCreationPage = () => {
     const [isCreator, setIsCreator] = useState(false); // 作成者かどうかを判定する状態
 
     useEffect(() => {
+
+        // Firestoreのルームドキュメントへの参照を作成
+        const roomRef = doc(db, 'rooms', roomId);
+
+        // onSnapshotでデータベースの変更をリアルタイムに監視
+        // コールバックの引数名を'doc'から'documentSnapshot'に変更（可読性向上のため）
+        const unsubscribe = onSnapshot(roomRef, (documentSnapshot) => {
+            if (documentSnapshot.exists()) {
+                console.log("Firestoreデータ更新:", documentSnapshot.data());
+                const roomData = documentSnapshot.data();
+
+                // マップ形式の参加者データをユーザー名のリストに変換
+                const participantsMap = roomData.participants || {};
+                const participantsList = Object.values(participantsMap);
+                setParticipants(participantsList);
+
+                // 自分が作成者かどうかを判定
+                const currentUid = localStorage.getItem('uid');
+                if (roomData.creator_uid === currentUid) {
+                    setIsCreator(true);
+                }
+            } else {
+                console.error("指定されたルームが見つかりません。");
+                navigate('/not-found');
+            }
+        });
+
         // WebSocket接続をコンポーネントがマウントされた時にのみ実行
         const socket = io('http://localhost:5001', { path: '/socket.io' });
         const username = localStorage.getItem('username');
@@ -22,12 +51,14 @@ const RoomCreationPage = () => {
         socket.on('connect', () => {
             console.log('Socket.IO connected!');
             if (username && uid) {
+                console.log(`🚀 'join_room'イベントを送信します。データ:`, { roomId, username, uid });
                 // ルーム参加を通知
                 socket.emit('join_room', { roomId, username, uid });
             }
         });
 
         socket.on('participants_update', (data) => {
+            console.log(`🎉 'participants_update'イベントを受信しました。データ:`, data)
             setParticipants(data.participants);
             const currentUid = localStorage.getItem('uid');
             if (data.creator_uid === currentUid) {
@@ -48,9 +79,10 @@ const RoomCreationPage = () => {
                 // コンポーネントがアンマウントされる前に leave_room イベントを送信
                 socket.emit('leave_room', { roomId, uid });
             }
+            unsubscribe();
             socket.disconnect();
         };
-    }, [roomId]); // roomId が変更された時のみuseEffectが実行される
+    }, [roomId, navigate]); // roomId が変更された時のみuseEffectが実行される
 
     const handleStartDiscussion = () => {
         // 議論開始ボタンが押された時の処理

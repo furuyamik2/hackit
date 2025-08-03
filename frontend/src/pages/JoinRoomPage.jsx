@@ -43,7 +43,7 @@ const JoinRoomPage = () => {
             }
 
             // 成功したと仮定して、議論ページに遷移
-            navigate(`/room/create/${roomId}`);
+            navigate(`/room/${roomId}`);
 
         } catch (err) {
             setError(err.message);
