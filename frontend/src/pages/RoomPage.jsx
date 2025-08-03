@@ -2,35 +2,90 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import io from 'socket.io-client';
 
+import { doc, getDoc } from "firebase/firestore";
+import { db } from "../firebase";
+// アイコンライブラリをインポートします (例: lucide-react)
+// npm install lucide-react もしくは yarn add lucide-react が必要です
+import { MessageCircle, Clock, Lightbulb, Users, CheckCircle2, Send } from 'lucide-react';
+
 const RoomPage = () => {
     const { roomId } = useParams();
     const navigate = useNavigate();
     const username = localStorage.getItem('username') || '名無しさん';
+    const [socket, setSocket] = useState(null); // socketインスタンスをstateで管理
 
-    // --- ダミーデータとState管理 ---
-    const [topic, setTopic] = useState('新サービスのアイデア出し'); // 本来は前の画面から受け取る
-    const [currentQuestion, setCurrentQuestion] = useState('このサービスで、一番解決したい課題は何ですか？');
-    const [timeLeft, setTimeLeft] = useState(300); // 5分 = 300秒
-    const [messages, setMessages] = useState([
-        { id: 1, user: 'AIファシリ屋さん', text: '最初の問いかけです。まずは5分間で、各自の意見をチャットに書き出してみましょう！' },
-        { id: 2, user: 'Alice', text: 'ユーザーが操作に迷わない、直感的なUIが一番大事だと思います。' },
-        { id: 3, user: 'Bob', text: '初心者が挫折しないような、丁寧なチュートリアル機能が必要ですよね。' },
-    ]);
+    // --- State管理 ---
+    const [topic, setTopic] = useState('議題を読み込み中...');
+    const [timeLeft, setTimeLeft] = useState(0);
+    const [messages, setMessages] = useState([]); // 初期値は必ず空の配列
     const [myMessage, setMyMessage] = useState('');
-    const [finishedCount, setFinishedCount] = useState(1); // 自分はまだ押していないので1
-    const [totalParticipants, setTotalParticipants] = useState(3); // 全参加者数
+    const [finishedCount, setFinishedCount] = useState(0);
+    const [totalParticipants, setTotalParticipants] = useState(0);
     const [hasFinished, setHasFinished] = useState(false);
 
     const chatEndRef = useRef(null);
 
-    const API_BASE_URL = 'https://facili-ya-san-ws-server.onrender.com';
+    const WS_SERVER_URL = 'https://facili-ya-san-ws-server.onrender.com';
+
+    useEffect(() => {
+        let socketInstance; // クリーンアップ関数で使えるように、外側で変数を定義
+
+        const setupRoom = async () => {
+            // まず、Firestoreから部屋の初期情報を取得します
+            const roomRef = doc(db, 'rooms', roomId);
+            const docSnap = await getDoc(roomRef);
+
+            if (docSnap.exists()) {
+                const roomData = docSnap.data();
+                setTopic(roomData.topic || '議題未設定');
+                const initialDurationInSeconds = (roomData.duration || 0) * 60;
+                setTimeLeft(initialDurationInSeconds);
+                setTotalParticipants(Object.keys(roomData.participants || {}).length);
+
+                // AIからの最初のメッセージをセット
+                setMessages([{
+                    id: Date.now(),
+                    user: 'AIファシリ屋さん',
+                    text: `議論を開始します：${roomData.topic}`
+                }]);
+
+                // Firestoreのデータ取得後にWebSocketに接続することで、レースコンディションを防ぎます
+                socketInstance = io(WS_SERVER_URL, {
+                    transports: ['websocket']
+                });
+                setSocket(socketInstance);
+
+                socketInstance.on('connect', () => {
+                    console.log('議論ページに接続しました。');
+                    socketInstance.emit('join_discussion_room', { roomId });
+                });
+
+                // 他のユーザーからの新しいメッセージを受信
+                socketInstance.on('new_message', (newMessage) => {
+                    setMessages(prevMessages => [...prevMessages, newMessage]);
+                });
+
+
+            } else {
+                console.log("ルーム情報が見つかりません！");
+                navigate('/not-found');
+            }
+        };
+
+        setupRoom();
+
+        // コンポーネントが消えるときに接続を解除
+        return () => {
+            if (socketInstance) {
+                socketInstance.disconnect();
+            }
+        };
+    }, [roomId, navigate]);;
 
     // --- タイマー処理 ---
     useEffect(() => {
         if (timeLeft <= 0) return;
-        const timer = setInterval(() => {
-            setTimeLeft(prevTime => prevTime - 1);
-        }, 1000);
+        const timer = setInterval(() => setTimeLeft(prev => prev > 0 ? prev - 1 : 0), 1000);
         return () => clearInterval(timer);
     }, [timeLeft]);
 
@@ -39,51 +94,25 @@ const RoomPage = () => {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
 
-    // --- WebSocket接続とイベントハンドラ (将来の実装用) ---
-    useEffect(() => {
-        const socket = io(`${API_BASE_URL}`);
-
-        socket.on('connect', () => {
-            console.log('議論ページに接続しました。');
-            socket.emit('join_discussion_room', { roomId });
-        });
-
-        // 新しいメッセージを受信するハンドラ
-        socket.on('new_message', (newMessage) => {
-            setMessages(prev => [...prev, newMessage]);
-        });
-
-        // 次の問いかけを受信するハンドラ
-        socket.on('next_question', (data) => {
-            setCurrentQuestion(data.question);
-            setTimeLeft(data.duration);
-            setHasFinished(false);
-            setFinishedCount(0);
-        });
-
-        return () => {
-            socket.disconnect();
-        };
-    }, [roomId]);
 
     // --- イベントハンドラ ---
     const handleSendMessage = (e) => {
         e.preventDefault();
-        if (myMessage.trim() === '') return;
+        if (myMessage.trim() === '' || !socket) return;
 
         const newMessage = {
-            id: messages.length + 1,
+            id: Date.now(), // 簡易的なユニークID
             user: username,
             text: myMessage,
         };
 
-        // ダミーで自分のメッセージを追加
-        setMessages(prev => [...prev, newMessage]);
+        // 自分の画面にメッセージを即時反映
+        setMessages(prevMessages => [...prevMessages, newMessage]);
 
-        // TODO: 本来はWebSocketでサーバーにメッセージを送信する
-        // socket.emit('send_message', { roomId, message: newMessage });
+        // サーバーにメッセージを送信して、他の参加者に転送してもらう
+        socket.emit('send_message', { roomId, message: newMessage });
 
-        setMyMessage('');
+        setMyMessage(''); // 入力欄を空にする
     };
 
     const handleFinishClick = () => {
@@ -100,80 +129,150 @@ const RoomPage = () => {
         return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
     };
 
+    const progressPercentage = totalParticipants > 0 ? (finishedCount / totalParticipants) * 100 : 0;
+
     return (
-        <div className="min-h-screen bg-gray-100 flex flex-col p-4 md:p-6 lg:p-8">
-            {/* ヘッダー：議題とタイマー */}
-            <header className="w-full max-w-5xl mx-auto bg-white p-4 rounded-xl shadow-md flex flex-col md:flex-row justify-between items-center mb-6">
-                <div>
-                    <h1 className="text-xl md:text-2xl font-bold text-gray-800">議題: {topic}</h1>
-                </div>
-                <div className="flex items-center gap-4 mt-4 md:mt-0">
-                    <span className="text-lg font-medium text-gray-600">残り時間</span>
-                    <span className="text-3xl font-bold text-blue-600 bg-blue-50 px-4 py-1 rounded-lg">
-                        {formatTime(timeLeft)}
-                    </span>
+        <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 flex flex-col p-4 md:p-6 lg:p-8">
+            {/* Modern Header with Glass Effect */}
+            <header className="w-full max-w-6xl mx-auto bg-white/80 backdrop-blur-xl p-6 rounded-2xl shadow-xl border border-white/20 mb-8">
+                <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
+                    <div className="flex items-center gap-4">
+                        <div className="p-3 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-xl">
+                            <MessageCircle className="w-6 h-6 text-white" />
+                        </div>
+                        <div>
+                            <h1 className="text-2xl lg:text-3xl font-bold bg-gradient-to-r from-gray-800 to-gray-600 bg-clip-text text-transparent">
+                                {topic}
+                            </h1>
+                            <p className="text-gray-500 mt-1">進行中のディスカッション</p>
+                        </div>
+                    </div>
+
+                    <div className="flex items-center gap-6">
+                        <div className="flex items-center gap-3 bg-gradient-to-r from-amber-50 to-orange-50 px-4 py-3 rounded-xl border border-amber-200">
+                            <Clock className="w-5 h-5 text-amber-600" />
+                            <span className="text-sm font-medium text-amber-700">残り時間</span>
+                        </div>
+                        <div className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent bg-white/90 px-6 py-3 rounded-xl shadow-lg border border-blue-100">
+                            {formatTime(timeLeft)}
+                        </div>
+                    </div>
                 </div>
             </header>
 
-            {/* メインコンテンツ */}
-            <main className="w-full max-w-5xl mx-auto flex-grow flex flex-col md:flex-row gap-6">
-                {/* 左側：お題と完了ボタン */}
-                <div className="w-full md:w-1/3 flex flex-col gap-6">
-                    <div className="bg-white p-6 rounded-xl shadow-md flex-1">
-                        <h2 className="text-lg font-semibold text-gray-700 mb-3">AIからの問いかけ</h2>
-                        <p className="text-xl text-gray-800 leading-relaxed">{currentQuestion}</p>
-                    </div>
-                    <div className="bg-white p-6 rounded-xl shadow-md">
-                        <p className="text-center text-gray-600 mb-4">
-                            完了した人の数: {finishedCount} / {totalParticipants} 人
+            {/* Main Content with Enhanced Layout */}
+            <main className="w-full max-w-6xl mx-auto flex-grow flex flex-col lg:flex-row gap-8 min-h-0">
+                {/* Left Panel: AI Question & Progress */}
+                <div className="w-full lg:w-2/5 flex flex-col gap-6">
+                    {/* AI Question Card */}
+                    <div className="bg-white/90 backdrop-blur-sm p-8 rounded-2xl shadow-xl border border-white/20 flex-1 hover:shadow-2xl transition-all duration-300">
+                        <div className="flex items-center gap-3 mb-6">
+                            <div className="p-2 bg-gradient-to-r from-yellow-400 to-orange-500 rounded-lg">
+                                <Lightbulb className="w-5 h-5 text-white" />
+                            </div>
+                            <h2 className="text-xl font-bold text-gray-800">AIからの問いかけ</h2>
+                        </div>
+                        <p className="text-lg text-gray-700 leading-relaxed font-medium">
+                            {/* TODO: AIからの問いかけを動的に更新 */}
+                            最初の問いかけ：この議題について、あなたの考えを自由に述べてください。
                         </p>
+                    </div>
+
+                    {/* Progress & Finish Button Card */}
+                    <div className="bg-white/90 backdrop-blur-sm p-6 rounded-2xl shadow-xl border border-white/20 hover:shadow-2xl transition-all duration-300">
+                        <div className="flex items-center gap-3 mb-4">
+                            <Users className="w-5 h-5 text-blue-600" />
+                            <h3 className="font-semibold text-gray-800">参加者の進捗</h3>
+                        </div>
+
+                        {/* Progress Bar */}
+                        <div className="mb-6">
+                            <div className="flex justify-between text-sm text-gray-600 mb-2">
+                                <span>完了済み</span>
+                                <span>{finishedCount} / {totalParticipants} 人</span>
+                            </div>
+                            <div className="w-full bg-gray-200 rounded-full h-3">
+                                <div
+                                    className="bg-gradient-to-r from-green-400 to-emerald-500 h-3 rounded-full transition-all duration-500 ease-out"
+                                    style={{ width: `${progressPercentage}%` }}
+                                ></div>
+                            </div>
+                        </div>
+
                         <button
                             onClick={handleFinishClick}
                             disabled={hasFinished}
-                            className="w-full py-3 text-lg font-semibold text-white bg-green-500 rounded-lg shadow-md hover:bg-green-600 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+                            className={`w-full py-4 text-lg font-semibold rounded-xl shadow-lg transition-all duration-300 transform ${hasFinished
+                                ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white cursor-default'
+                                : 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white hover:from-blue-600 hover:to-indigo-700 hover:scale-105 hover:shadow-xl active:scale-95'
+                                }`}
                         >
-                            {hasFinished ? '完了！' : '完了'}
+                            <div className="flex items-center justify-center gap-2">
+                                {hasFinished && <CheckCircle2 className="w-5 h-5" />}
+                                {hasFinished ? '完了しました！' : '作業完了'}
+                            </div>
                         </button>
                     </div>
                 </div>
 
-                {/* 右側：チャットエリア */}
-                <div className="w-full md:w-2/3 bg-white rounded-xl shadow-md flex flex-col h-[70vh]">
-                    {/* メッセージ表示エリア */}
-                    <div className="flex-grow p-6 overflow-y-auto">
-                        {/* ▼▼▼【ここからが変更点】▼▼▼ */}
+                {/* Right Panel: Enhanced Chat Area */}
+                <div className="w-full lg:w-3/5 bg-white/90 backdrop-blur-sm rounded-2xl shadow-xl border border-white/20 flex flex-col overflow-hidden">
+                    {/* Chat Header */}
+                    <div className="p-6 border-b border-gray-100 bg-gradient-to-r from-blue-50 to-indigo-50">
+                        <div className="flex items-center gap-3">
+                            <MessageCircle className="w-5 h-5 text-blue-600" />
+                            <h3 className="font-semibold text-gray-800">チャット</h3>
+                            <span className="px-3 py-1 bg-blue-100 text-blue-700 text-sm rounded-full font-medium">
+                                {messages.length} メッセージ
+                            </span>
+                        </div>
+                    </div>
+
+                    {/* Messages Area */}
+                    <div className="flex-grow p-6 overflow-y-auto space-y-4" style={{ maxHeight: 'calc(100vh - 400px)' }}>
                         {messages.map((msg) => (
-                            <div key={msg.id} className={`flex flex-col mb-4 ${msg.user === username ? 'items-end' : 'items-start'}`}>
-                                {/* AI以外のユーザー名を吹き出しの外に表示 */}
+                            <div key={msg.id} className={`flex flex-col ${msg.user === username ? 'items-end' : 'items-start'}`}>
                                 {msg.user !== 'AIファシリ屋さん' && (
-                                    <p className="text-xs text-gray-500 mb-1 px-1">{msg.user}</p>
+                                    <p className="text-xs text-gray-500 mb-1 px-2">{msg.user}</p>
                                 )}
-                                <div className={`max-w-xs lg:max-w-md p-3 rounded-2xl ${msg.user === username ? 'bg-blue-500 text-white' : (msg.user === 'AIファシリ屋さん' ? 'bg-yellow-200 text-gray-800' : 'bg-gray-200 text-gray-800')}`}>
-                                    {/* AIファシリ屋さんの場合のみ、名前を吹き出し内に表示 */}
+                                <div className={`max-w-xs lg:max-w-md p-4 rounded-2xl shadow-md transition-all duration-200 hover:shadow-lg ${msg.user === username
+                                    ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white ml-4'
+                                    : msg.user === 'AIファシリ屋さん'
+                                        ? 'bg-gradient-to-r from-yellow-100 to-amber-100 text-gray-800 border border-yellow-200 mr-4'
+                                        : 'bg-gradient-to-r from-gray-100 to-gray-200 text-gray-800 mr-4'
+                                    }`}>
                                     {msg.user === 'AIファシリ屋さん' && (
-                                        <p className="text-sm font-semibold mb-1">{msg.user}</p>
+                                        <div className="flex items-center gap-2 mb-2">
+                                            <div className="p-1 bg-yellow-400 rounded-full">
+                                                <Lightbulb className="w-3 h-3 text-white" />
+                                            </div>
+                                            <p className="text-sm font-semibold text-yellow-800">{msg.user}</p>
+                                        </div>
                                     )}
-                                    <p className="text-md">{msg.text}</p>
+                                    <p className="text-sm leading-relaxed">{msg.text}</p>
                                 </div>
                             </div>
                         ))}
-                        {/* ▲▲▲【ここまでが変更点】▲▲▲ */}
                         <div ref={chatEndRef} />
                     </div>
-                    {/* メッセージ入力フォーム */}
-                    <form onSubmit={handleSendMessage} className="p-4 border-t border-gray-200 flex items-center gap-4">
-                        <input
-                            type="text"
-                            value={myMessage}
-                            onChange={(e) => setMyMessage(e.target.value)}
-                            placeholder="メッセージを入力..."
-                            className="flex-grow px-4 py-3 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                        <button type="submit" className="bg-blue-500 text-white rounded-full p-3 shadow-md hover:bg-blue-600 transition-colors">
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                            </svg>
-                        </button>
+
+                    {/* Enhanced Message Input */}
+                    <form onSubmit={handleSendMessage} className="p-6 border-t border-gray-100 bg-gray-50/50">
+                        <div className="flex items-center gap-4">
+                            <input
+                                type="text"
+                                value={myMessage}
+                                onChange={(e) => setMyMessage(e.target.value)}
+                                placeholder="メッセージを入力してください..."
+                                className="flex-grow px-6 py-4 border-2 border-gray-200 rounded-2xl focus:outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-100 transition-all duration-200 bg-white shadow-sm"
+                            />
+                            <button
+                                type="submit"
+                                className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-2xl p-4 shadow-lg hover:from-blue-600 hover:to-indigo-700 transition-all duration-200 transform hover:scale-105 active:scale-95 focus:outline-none focus:ring-4 focus:ring-blue-200"
+                            >
+                                <Send className="h-5 w-5" />
+                            </button>
+                        </div>
                     </form>
                 </div>
             </main>
