@@ -15,6 +15,8 @@ const RoomCreationPage = () => {
     const [duration, setDuration] = useState('');
     const [isCreator, setIsCreator] = useState(false); // 作成者かどうかを判定する状態
 
+    const API_BASE_URL = 'https://facili-ya-san-ws-server.onrender.com';
+
     useEffect(() => {
 
         // Firestoreのルームドキュメントへの参照を作成
@@ -44,7 +46,7 @@ const RoomCreationPage = () => {
         });
 
         // WebSocket接続をコンポーネントがマウントされた時にのみ実行
-        const socket = io('http://localhost:5001', { path: '/socket.io' });
+        const socket = io(`${API_BASE_URL}`, { path: '/socket.io' });
         const username = localStorage.getItem('username');
         const uid = localStorage.getItem('uid');
 
