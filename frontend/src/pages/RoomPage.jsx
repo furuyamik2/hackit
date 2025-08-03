@@ -4,27 +4,34 @@ import io from 'socket.io-client';
 
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "../firebase";
-// アイコンライブラリをインポートします (例: lucide-react)
-// npm install lucide-react もしくは yarn add lucide-react が必要です
-import { MessageCircle, Clock, Lightbulb, Users, CheckCircle2, Send } from 'lucide-react';
+import { MessageCircle, Clock, Lightbulb, Users, CheckCircle2, Send, LoaderCircle, ListChecks } from 'lucide-react';
 
 const RoomPage = () => {
     const { roomId } = useParams();
     const navigate = useNavigate();
     const username = localStorage.getItem('username') || '名無しさん';
-    const [socket, setSocket] = useState(null); // socketインスタンスをstateで管理
+    const uid = localStorage.getItem('uid');
+    const [socket, setSocket] = useState(null);
 
     // --- State管理 ---
-    const [topic, setTopic] = useState('議題を読み込み中...');
-    const [timeLeft, setTimeLeft] = useState(0);
-    const [messages, setMessages] = useState([]); // 初期値は必ず空の配列
+    const [topic, setTopic] = useState('');
+    const [messages, setMessages] = useState([]);
     const [myMessage, setMyMessage] = useState('');
-    const [finishedCount, setFinishedCount] = useState(0);
+
+
+    const [agenda, setAgenda] = useState([]);
+    const [currentStepIndex, setCurrentStepIndex] = useState(0);
+
+    const [timeLeft, setTimeLeft] = useState(0);
+    const [isLoadingAgenda, setIsLoadingAgenda] = useState(true);
     const [totalParticipants, setTotalParticipants] = useState(0);
+    const [finishedCount, setFinishedCount] = useState(0);
     const [hasFinished, setHasFinished] = useState(false);
+    const [isDiscussionComplete, setIsDiscussionComplete] = useState(false);
+
 
     const chatEndRef = useRef(null);
-
+    const API_BASE_URL = 'https://facili-ya-san-api.onrender.com';
     const WS_SERVER_URL = 'https://facili-ya-san-ws-server.onrender.com';
 
     useEffect(() => {
@@ -49,9 +56,37 @@ const RoomPage = () => {
                     text: `議論を開始します：${roomData.topic}`
                 }]);
 
+                // AIアジェンダ生成APIを呼び出す
+                try {
+                    const agendaResponse = await fetch(`${API_BASE_URL}/generate_agenda`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            topic: roomData.topic,
+                            total_duration: roomData.duration
+                        }),
+                    });
+                    if (!agendaResponse.ok) throw new Error('AIアジェンダの生成に失敗');
+
+                    const generatedAgenda = await agendaResponse.json();
+                    setAgenda(generatedAgenda);
+                    // 最初のステップの時間と問いかけを設定
+                    setTimeLeft(generatedAgenda[0].allocated_time * 60);
+                    setMessages([{ id: Date.now(), user: 'AIファシリ屋さん', text: generatedAgenda[0].prompt_question }]);
+
+                } catch (error) {
+                    console.error(error);
+                    // エラーの場合は固定のメッセージを表示
+                    setAgenda([{ step_name: "エラー", prompt_question: "アジェンダの生成に失敗しました。", allocated_time: 5 }]);
+                    setTimeLeft(300);
+                } finally {
+                    setIsLoadingAgenda(false);
+                }
+
                 // Firestoreのデータ取得後にWebSocketに接続することで、レースコンディションを防ぎます
                 socketInstance = io(WS_SERVER_URL, {
-                    transports: ['websocket']
+                    transports: ['websocket'],
+                    upgrade: false // このオプションが重要です
                 });
                 setSocket(socketInstance);
 
@@ -62,7 +97,24 @@ const RoomPage = () => {
 
                 // 他のユーザーからの新しいメッセージを受信
                 socketInstance.on('new_message', (newMessage) => {
+                    if (newMessage.uid && newMessage.uid === uid) {
+                        return;
+                    }
                     setMessages(prevMessages => [...prevMessages, newMessage]);
+                });
+
+                // ▼▼▼【変更点】サーバーからの進捗更新を受け取るリスナー ▼▼▼
+                socketInstance.on('progress_update', (data) => {
+                    setFinishedCount(data.finished_count);
+                    setTotalParticipants(data.total_participants);
+
+                    // 全員が完了したかチェック
+                    if (data.total_participants > 0 && data.finished_count >= data.total_participants) {
+                        // 1秒後に次のステップへ進む
+                        setTimeout(() => {
+                            moveToNextStep(socketInstance);
+                        }, 1000);
+                    }
                 });
 
 
@@ -80,7 +132,7 @@ const RoomPage = () => {
                 socketInstance.disconnect();
             }
         };
-    }, [roomId, navigate]);;
+    }, [roomId, navigate, uid]);;
 
     // --- タイマー処理 ---
     useEffect(() => {
@@ -101,9 +153,10 @@ const RoomPage = () => {
         if (myMessage.trim() === '' || !socket) return;
 
         const newMessage = {
-            id: Date.now(), // 簡易的なユニークID
+            id: `${Date.now()}-${uid}`, // 簡易的なユニークID
             user: username,
             text: myMessage,
+            uid: uid
         };
 
         // 自分の画面にメッセージを即時反映
@@ -116,10 +169,17 @@ const RoomPage = () => {
     };
 
     const handleFinishClick = () => {
-        setHasFinished(true);
-        setFinishedCount(prev => prev + 1); // ダミーでカウントアップ
-        // TODO: 本来はWebSocketでサーバーに完了したことを通知する
-        // socket.emit('finish_step', { roomId, uid: localStorage.getItem('uid') });
+        const nextStepIndex = currentStepIndex + 1;
+        if (agenda && nextStepIndex < agenda.length) {
+            setCurrentStepIndex(nextStepIndex);
+            const nextStep = agenda[nextStepIndex];
+            setTimeLeft(nextStep.allocated_time * 60);
+            setMessages(prev => [...prev, { id: Date.now(), user: 'AIファシリ屋さん', text: nextStep.prompt_question }]);
+        } else {
+            setIsDiscussionComplete(true);
+        }
+        setHasFinished(false);
+        setFinishedCount(0);
     };
 
     // --- 表示用のヘルパー関数 ---
@@ -131,9 +191,17 @@ const RoomPage = () => {
 
     const progressPercentage = totalParticipants > 0 ? (finishedCount / totalParticipants) * 100 : 0;
 
+    if (isLoadingAgenda) {
+        return (
+            <div className="min-h-screen flex flex-col items-center justify-center bg-gray-100">
+                <LoaderCircle className="w-12 h-12 text-blue-500 animate-spin" />
+                <p className="mt-4 text-lg text-gray-600">議題に合わせた段取りを生成中です...</p>
+            </div>
+        );
+    }
+
     return (
         <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 flex flex-col p-4 md:p-6 lg:p-8">
-            {/* Modern Header with Glass Effect */}
             <header className="w-full max-w-6xl mx-auto bg-white/80 backdrop-blur-xl p-6 rounded-2xl shadow-xl border border-white/20 mb-8">
                 <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
                     <div className="flex items-center gap-4">
@@ -160,32 +228,52 @@ const RoomPage = () => {
                 </div>
             </header>
 
-            {/* Main Content with Enhanced Layout */}
             <main className="w-full max-w-6xl mx-auto flex-grow flex flex-col lg:flex-row gap-8 min-h-0">
-                {/* Left Panel: AI Question & Progress */}
                 <div className="w-full lg:w-2/5 flex flex-col gap-6">
-                    {/* AI Question Card */}
-                    <div className="bg-white/90 backdrop-blur-sm p-8 rounded-2xl shadow-xl border border-white/20 flex-1 hover:shadow-2xl transition-all duration-300">
-                        <div className="flex items-center gap-3 mb-6">
-                            <div className="p-2 bg-gradient-to-r from-yellow-400 to-orange-500 rounded-lg">
-                                <Lightbulb className="w-5 h-5 text-white" />
+                    <div className="bg-white/90 backdrop-blur-sm p-8 rounded-2xl shadow-xl border border-white/20 flex-1 flex flex-col hover:shadow-2xl transition-all duration-300">
+                        {/* 現在のステップ */}
+                        <div>
+                            <div className="flex items-center gap-3 mb-4">
+                                <div className="p-2 bg-gradient-to-r from-yellow-400 to-orange-500 rounded-lg">
+                                    <Lightbulb className="w-5 h-5 text-white" />
+                                </div>
+                                <h2 className="text-xl font-bold text-gray-800">
+                                    {agenda[currentStepIndex]?.step_name || "現在のステップ"}
+                                </h2>
                             </div>
-                            <h2 className="text-xl font-bold text-gray-800">AIからの問いかけ</h2>
+                            <p className="text-lg text-gray-700 leading-relaxed font-medium mb-6">
+                                {agenda[currentStepIndex]?.prompt_question || "読み込み中..."}
+                            </p>
                         </div>
-                        <p className="text-lg text-gray-700 leading-relaxed font-medium">
-                            {/* TODO: AIからの問いかけを動的に更新 */}
-                            最初の問いかけ：この議題について、あなたの考えを自由に述べてください。
-                        </p>
+
+                        <div className="border-t border-gray-200 pt-6 mt-auto">
+                            <div className="flex items-center gap-3 mb-4">
+                                <ListChecks className="w-5 h-5 text-gray-500" />
+                                <h3 className="font-semibold text-gray-600">全体の流れ</h3>
+                            </div>
+                            <ul className="space-y-3">
+                                {agenda.map((step, index) => (
+                                    <li key={index} className={`p-3 rounded-lg transition-all duration-200 ${index === currentStepIndex ? 'bg-blue-100 shadow-inner' : 'bg-gray-50'}`}>
+                                        <div className="flex justify-between items-center">
+                                            <span className={`font-medium ${index === currentStepIndex ? 'text-blue-700' : 'text-gray-600'}`}>
+                                                {index + 1}. {step.step_name}
+                                            </span>
+                                            <span className={`font-semibold text-sm px-2 py-1 rounded-md ${index === currentStepIndex ? 'bg-blue-200 text-blue-800' : 'bg-gray-200 text-gray-700'}`}>
+                                                {step.allocated_time}分
+                                            </span>
+                                        </div>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
                     </div>
 
-                    {/* Progress & Finish Button Card */}
                     <div className="bg-white/90 backdrop-blur-sm p-6 rounded-2xl shadow-xl border border-white/20 hover:shadow-2xl transition-all duration-300">
                         <div className="flex items-center gap-3 mb-4">
                             <Users className="w-5 h-5 text-blue-600" />
                             <h3 className="font-semibold text-gray-800">参加者の進捗</h3>
                         </div>
 
-                        {/* Progress Bar */}
                         <div className="mb-6">
                             <div className="flex justify-between text-sm text-gray-600 mb-2">
                                 <span>完了済み</span>
@@ -215,9 +303,7 @@ const RoomPage = () => {
                     </div>
                 </div>
 
-                {/* Right Panel: Enhanced Chat Area */}
                 <div className="w-full lg:w-3/5 bg-white/90 backdrop-blur-sm rounded-2xl shadow-xl border border-white/20 flex flex-col overflow-hidden">
-                    {/* Chat Header */}
                     <div className="p-6 border-b border-gray-100 bg-gradient-to-r from-blue-50 to-indigo-50">
                         <div className="flex items-center gap-3">
                             <MessageCircle className="w-5 h-5 text-blue-600" />
@@ -228,7 +314,6 @@ const RoomPage = () => {
                         </div>
                     </div>
 
-                    {/* Messages Area */}
                     <div className="flex-grow p-6 overflow-y-auto space-y-4" style={{ maxHeight: 'calc(100vh - 400px)' }}>
                         {messages.map((msg) => (
                             <div key={msg.id} className={`flex flex-col ${msg.user === username ? 'items-end' : 'items-start'}`}>
@@ -256,7 +341,6 @@ const RoomPage = () => {
                         <div ref={chatEndRef} />
                     </div>
 
-                    {/* Enhanced Message Input */}
                     <form onSubmit={handleSendMessage} className="p-6 border-t border-gray-100 bg-gray-50/50">
                         <div className="flex items-center gap-4">
                             <input
@@ -276,6 +360,23 @@ const RoomPage = () => {
                     </form>
                 </div>
             </main>
+
+            {/* ▼▼▼【追加】ディスカッション完了メッセージ用のモーダル ▼▼▼ */}
+            {isDiscussionComplete && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm flex items-center justify-center z-50 transition-opacity duration-300">
+                    <div className="bg-white p-8 md:p-12 rounded-2xl shadow-2xl text-center max-w-md mx-4 transform transition-all scale-100 opacity-100">
+                        <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto mb-6 animate-pulse" />
+                        <h2 className="text-3xl font-bold text-gray-800 mb-3">ディスカッション完了！</h2>
+                        <p className="text-gray-600 mb-8 text-lg">素晴らしい議論でした。お疲れ様でした！</p>
+                        <button
+                            onClick={() => navigate('/')}
+                            className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white font-semibold px-10 py-4 rounded-lg shadow-lg hover:scale-105 transition-transform duration-200"
+                        >
+                            ホームに戻る
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

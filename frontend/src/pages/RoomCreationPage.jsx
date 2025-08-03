@@ -54,7 +54,6 @@ const RoomCreationPage = () => {
             }
         });
 
-
         return () => {
             console.log("Leaving room and disconnecting socket...");
             // if (username && uid) {
