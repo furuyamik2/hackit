@@ -2,8 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import io from 'socket.io-client'; // WebSocket通信のためにsocket.io-clientをインポート
 
-// const socket = io('http://localhost:5001', { path: '/socket.io' });
-
 
 const RoomCreationPage = () => {
     const { roomId } = useParams();
@@ -67,7 +65,7 @@ const RoomCreationPage = () => {
         console.log('議論開始情報:', { topic, duration });
 
         // 議論実行ページに遷移
-        navigate(`/room/discussion/${roomId}`);
+        navigate(`/room/${roomId}/discussion`);
     };
 
     return (
