@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import io from 'socket.io-client'; // WebSocket通信のためにsocket.io-clientをインポート
 
-const socket = io('http://localhost:5001', { path: '/socket.io' });
+// const socket = io('http://localhost:5001', { path: '/socket.io' });
 
 
 const RoomCreationPage = () => {
@@ -17,6 +17,7 @@ const RoomCreationPage = () => {
 
     useEffect(() => {
         // WebSocket接続をコンポーネントがマウントされた時にのみ実行
+        const socket = io('http://localhost:5001', { path: '/socket.io' });
         const username = localStorage.getItem('username');
         const uid = localStorage.getItem('uid');
 
@@ -52,14 +53,6 @@ const RoomCreationPage = () => {
             socket.disconnect();
         };
     }, [roomId]); // roomId が変更された時のみuseEffectが実行される
-
-    // ローカルストレージから取得したユーザー名を初期表示
-    useEffect(() => {
-        const username = localStorage.getItem('username');
-        if (username) {
-            setParticipants([username]);
-        }
-    }, []);
 
     const handleStartDiscussion = () => {
         // 議論開始ボタンが押された時の処理

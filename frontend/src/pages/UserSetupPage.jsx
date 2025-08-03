@@ -26,10 +26,6 @@ const UserSetupPage = () => {
             const user = userCredential.user;
             const uid = user.uid;
 
-            // ユーザー名とUIDをlocalStorageに保存
-            localStorage.setItem('username', username);
-            localStorage.setItem('uid', uid);
-
             console.log("Authenticated as:", uid);
 
             const response = await fetch('http://localhost:5000/create_room', {
@@ -37,7 +33,7 @@ const UserSetupPage = () => {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ username }),
+                body: JSON.stringify({ username, uid }),
             });
 
             if (!response.ok) {
@@ -46,6 +42,9 @@ const UserSetupPage = () => {
 
             const data = await response.json();
             const roomId = data.roomId;
+
+            localStorage.setItem('username', username);
+            localStorage.setItem('uid', uid)
 
             // 成功したら、ルームの議論準備ページに遷移
             navigate(`/room/create/${roomId}`)
