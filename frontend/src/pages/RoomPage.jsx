@@ -34,6 +34,31 @@ const RoomPage = () => {
     const API_BASE_URL = 'https://facili-ya-san-api.onrender.com';
     const WS_SERVER_URL = 'https://facili-ya-san-ws-server.onrender.com';
 
+    // 次のステップに進むための関数を定義
+    const moveToNextStep = () => {
+        console.log("➡️ moveToNextStep 関数が呼び出されました。");
+        const nextStepIndex = currentStepIndex + 1;
+
+        if (agenda && nextStepIndex < agenda.length) {
+            console.log(`🧠 次のステップに進みます。Index: ${nextStepIndex}`);
+            const nextStep = agenda[nextStepIndex];
+            setCurrentStepIndex(nextStepIndex);
+            setTimeLeft(nextStep.allocated_time * 60);
+            setMessages(prev => [...prev, { id: Date.now(), user: 'AIファシリ屋さん', text: nextStep.prompt_question }]);
+            setHasFinished(false);
+            setFinishedCount(0);
+
+            // 【重要】サーバーに進捗のリセットを依頼する処理を復活させる
+            if (socket) {
+                console.log("⏩ サーバーに進捗のリセットを依頼します ('reset_progress_for_next_step')");
+                socket.emit('reset_progress_for_next_step', { roomId });
+            }
+        } else {
+            console.log("🎉 全ての議題が完了しました。ディスカッションを終了します。");
+            setIsDiscussionComplete(true);
+        }
+    };
+
     useEffect(() => {
         let socketInstance; // クリーンアップ関数で使えるように、外側で変数を定義
 
@@ -44,44 +69,28 @@ const RoomPage = () => {
 
             if (docSnap.exists()) {
                 const roomData = docSnap.data();
+
+                // Firestoreに保存されたアジェンダを直接取得
+                const savedAgenda = roomData.agenda;
+
+                if (!savedAgenda || savedAgenda.length === 0) {
+                    // もしアジェンダがまだなければ（ホストが設定中など）、待機画面などを表示
+                    console.log("アジェンダがまだ設定されていません。");
+                    // ここでは仮にローディング表示を続けます
+                    setIsLoadingAgenda(true);
+                    // 必要であれば、数秒後にリロードするなどの処理を追加
+                    return;
+                }
+
+                // 取得した部屋情報とアジェンダをStateに設定
                 setTopic(roomData.topic || '議題未設定');
-                const initialDurationInSeconds = (roomData.duration || 0) * 60;
-                setTimeLeft(initialDurationInSeconds);
+                setAgenda(savedAgenda);
                 setTotalParticipants(Object.keys(roomData.participants || {}).length);
 
-                // AIからの最初のメッセージをセット
-                setMessages([{
-                    id: Date.now(),
-                    user: 'AIファシリ屋さん',
-                    text: `議論を開始します：${roomData.topic}`
-                }]);
-
-                // AIアジェンダ生成APIを呼び出す
-                try {
-                    const agendaResponse = await fetch(`${API_BASE_URL}/generate_agenda`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            topic: roomData.topic,
-                            total_duration: roomData.duration
-                        }),
-                    });
-                    if (!agendaResponse.ok) throw new Error('AIアジェンダの生成に失敗');
-
-                    const generatedAgenda = await agendaResponse.json();
-                    setAgenda(generatedAgenda);
-                    // 最初のステップの時間と問いかけを設定
-                    setTimeLeft(generatedAgenda[0].allocated_time * 60);
-                    setMessages([{ id: Date.now(), user: 'AIファシリ屋さん', text: generatedAgenda[0].prompt_question }]);
-
-                } catch (error) {
-                    console.error(error);
-                    // エラーの場合は固定のメッセージを表示
-                    setAgenda([{ step_name: "エラー", prompt_question: "アジェンダの生成に失敗しました。", allocated_time: 5 }]);
-                    setTimeLeft(300);
-                } finally {
-                    setIsLoadingAgenda(false);
-                }
+                // 最初のステップの時間と問いかけを設定
+                setTimeLeft(savedAgenda[0].allocated_time * 60);
+                setMessages([{ id: Date.now(), user: 'AIファシリ屋さん', text: savedAgenda[0].prompt_question }]);
+                setIsLoadingAgenda(false); // ローディング完了
 
                 // Firestoreのデータ取得後にWebSocketに接続することで、レースコンディションを防ぎます
                 socketInstance = io(WS_SERVER_URL, {
@@ -103,17 +112,17 @@ const RoomPage = () => {
                     setMessages(prevMessages => [...prevMessages, newMessage]);
                 });
 
-                // ▼▼▼【変更点】サーバーからの進捗更新を受け取るリスナー ▼▼▼
+                // 【重要】このリスナーを有効に戻す
                 socketInstance.on('progress_update', (data) => {
+                    console.log("🔄 [progress_update] 進捗情報を受信しました。", data);
                     setFinishedCount(data.finished_count);
                     setTotalParticipants(data.total_participants);
 
-                    // 全員が完了したかチェック
                     if (data.total_participants > 0 && data.finished_count >= data.total_participants) {
-                        // 1秒後に次のステップへ進む
+                        console.log("👏 全員が完了しました！1.5秒後に moveToNextStep を呼び出します。");
                         setTimeout(() => {
-                            moveToNextStep(socketInstance);
-                        }, 1000);
+                            moveToNextStep();
+                        }, 500);
                     }
                 });
 
@@ -147,6 +156,7 @@ const RoomPage = () => {
     }, [messages]);
 
 
+
     // --- イベントハンドラ ---
     const handleSendMessage = (e) => {
         e.preventDefault();
@@ -168,18 +178,16 @@ const RoomPage = () => {
         setMyMessage(''); // 入力欄を空にする
     };
 
+    // 作業完了」ボタンの処理をシンプルに
     const handleFinishClick = () => {
-        const nextStepIndex = currentStepIndex + 1;
-        if (agenda && nextStepIndex < agenda.length) {
-            setCurrentStepIndex(nextStepIndex);
-            const nextStep = agenda[nextStepIndex];
-            setTimeLeft(nextStep.allocated_time * 60);
-            setMessages(prev => [...prev, { id: Date.now(), user: 'AIファシリ屋さん', text: nextStep.prompt_question }]);
+        // まだ完了報告をしていなければ、サーバーに通知する
+        if (!hasFinished && socket) {
+            console.log("👍 'finish_step' イベントをサーバーに送信します。");
+            setHasFinished(true); // ボタンを二度押しできないようにする
+            socket.emit('finish_step', { roomId, uid });
         } else {
-            setIsDiscussionComplete(true);
+            console.error("❌ 送信不可：Socket未接続または完了済みです。");
         }
-        setHasFinished(false);
-        setFinishedCount(0);
     };
 
     // --- 表示用のヘルパー関数 ---
@@ -297,7 +305,7 @@ const RoomPage = () => {
                         >
                             <div className="flex items-center justify-center gap-2">
                                 {hasFinished && <CheckCircle2 className="w-5 h-5" />}
-                                {hasFinished ? '完了しました！' : '作業完了'}
+                                {hasFinished ? '回答済' : '完了'}
                             </div>
                         </button>
                     </div>
